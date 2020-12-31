@@ -5,6 +5,7 @@
 
 import typing
 import warnings
+import logging
 
 from datasets.base import DataLoader
 import datasets.registry
@@ -19,11 +20,23 @@ from training import optimizers
 from training import standard_callbacks
 from training.metric_logger import MetricLogger
 
+
+logging.basicConfig()
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
 try:
     import apex
     NO_APEX = False
 except ImportError:
     NO_APEX = True
+
+
+def param_counter(model):
+    param_counter = 0
+    for p_index, (p_name, p) in enumerate(model.named_parameters()):
+        param_counter += p.numel()
+    return param_counter
 
 
 def train(
@@ -91,13 +104,28 @@ def train(
     end_step = end_step or Step.from_str(training_hparams.training_steps, train_loader.iterations_per_epoch)
     if end_step <= start_step: return
 
+    logger.info("###### Model arch: {}, Num Params: {}".format(model, param_counter(model)))
+
     # The training loop.
     for ep in range(start_step.ep, end_step.ep + 1):
 
         # Ensure the data order is different for each epoch.
         train_loader.shuffle(None if data_order_seed is None else (data_order_seed + ep))
 
+        # time measuring
+        epoch_total_time = 0.0
+        epoch_comp_time = 0.0
+        epoch_data_time = 0.0
+
         for it, (examples, labels) in enumerate(train_loader):
+            iter_start = torch.cuda.Event(enable_timing=True)
+            iter_end = torch.cuda.Event(enable_timing=True)
+
+            comp_start = torch.cuda.Event(enable_timing=True)
+            comp_end = torch.cuda.Event(enable_timing=True)
+
+            data_start = torch.cuda.Event(enable_timing=True)
+            data_end = torch.cuda.Event(enable_timing=True)
 
             # Advance the data loader until the start epoch and iteration.
             if ep == start_step.ep and it < start_step.it: continue
@@ -110,11 +138,19 @@ def train(
             if ep == end_step.ep and it == end_step.it: return
 
             # Otherwise, train.
+            iter_start.record()
+            data_start.record()
             examples = examples.to(device=get_platform().torch_device)
             labels = labels.to(device=get_platform().torch_device)
+            data_end.record() # measuring data loading time
+            torch.cuda.synchronize()
+            iter_data_dur = float(data_start.elapsed_time(data_end))/1000.0
+            epoch_data_time += iter_data_dur
 
             step_optimizer.zero_grad()
             model.train()
+
+            comp_start.record() # only contain comp time
             loss = model.loss_criterion(model(examples), labels)
             if training_hparams.apex_fp16:
                 with apex.amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -124,9 +160,26 @@ def train(
 
             # Step forward. Ignore extraneous warnings that the lr_schedule generates.
             step_optimizer.step()
+
+            comp_end.record() # only contain comp time
+            torch.cuda.synchronize()
+            iter_comp_dur = float(comp_start.elapsed_time(comp_end))/1000.0
+            epoch_comp_time += iter_comp_dur
+
             with warnings.catch_warnings():  # Filter unnecessary warning.
                 warnings.filterwarnings("ignore", category=UserWarning)
                 lr_schedule.step()
+
+            iter_end.record()
+            torch.cuda.synchronize()
+            iter_total_dur = float(iter_start.elapsed_time(iter_end))/1000.0
+            epoch_total_time += iter_total_dur
+
+        logger.info("####### Time Cost for Epoch: {} ===> Total: {}, Comp: {}, Data: {}".format(
+                                            ep, 
+                                            epoch_total_time,
+                                            epoch_comp_time,
+                                            epoch_data_time))
 
     get_platform().barrier()
 

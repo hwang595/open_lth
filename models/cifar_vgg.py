@@ -20,7 +20,7 @@ class Model(base.Model):
 
         def __init__(self, in_filters, out_filters):
             super(Model.ConvModule, self).__init__()
-            self.conv = nn.Conv2d(in_filters, out_filters, kernel_size=3, padding=1)
+            self.conv = nn.Conv2d(in_filters, out_filters, kernel_size=3, padding=1, bias=False)
             self.bn = nn.BatchNorm2d(out_filters)
 
         def forward(self, x):
