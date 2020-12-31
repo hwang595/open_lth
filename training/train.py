@@ -22,8 +22,8 @@ from training.metric_logger import MetricLogger
 
 
 logging.basicConfig()
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+helper_logger = logging.getLogger()
+helper_logger.setLevel(logging.INFO)
 
 try:
     import apex
@@ -104,7 +104,7 @@ def train(
     end_step = end_step or Step.from_str(training_hparams.training_steps, train_loader.iterations_per_epoch)
     if end_step <= start_step: return
 
-    logger.info("###### Model arch: {}, Num Params: {}".format(model, param_counter(model)))
+    helper_logger.info("###### Model arch: {}, Num Params: {}".format(model, param_counter(model)))
 
     # The training loop.
     for ep in range(start_step.ep, end_step.ep + 1):
@@ -175,7 +175,7 @@ def train(
             iter_total_dur = float(iter_start.elapsed_time(iter_end))/1000.0
             epoch_total_time += iter_total_dur
 
-        logger.info("####### Time Cost for Epoch: {} ===> Total: {}, Comp: {}, Data: {}".format(
+        helper_logger.info("####### Time Cost for Epoch: {} ===> Total: {}, Comp: {}, Data: {}".format(
                                             ep, 
                                             epoch_total_time,
                                             epoch_comp_time,
